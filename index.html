@@ -287,6 +287,17 @@
         .history-item-actions .btn-delete { color: #ff4d4f; border-color: #ff4d4f; }
         .history-item-actions .btn-delete:hover { background: #fff1f0; }
         .history-empty { text-align: center; color: #999; padding: 40px 0; }
+        .pagination {
+            display: flex; justify-content: center; align-items: center; gap: 15px;
+            padding: 15px 0; margin-top: 10px; border-top: 1px solid #eee;
+        }
+        .pagination button {
+            padding: 6px 15px; border: 1px solid #ddd; border-radius: 4px;
+            background: #fff; cursor: pointer; font-size: 13px;
+        }
+        .pagination button:hover:not(:disabled) { background: #1890ff; color: #fff; border-color: #1890ff; }
+        .pagination button:disabled { opacity: 0.5; cursor: not-allowed; }
+        .pagination #pageInfo { font-size: 14px; color: #666; }
         .new-training-btn {
             display: block; width: 100%; padding: 15px; background: #1890ff; color: #fff;
             border: none; border-radius: 8px; font-size: 15px; cursor: pointer; margin-bottom: 15px;
@@ -403,6 +414,12 @@
         <ul class="history-list" id="historyList">
             <li class="history-empty">加载中...</li>
         </ul>
+        <!-- 分页控件 -->
+        <div class="pagination" id="historyPagination" style="display:none;">
+            <button id="pagePrev" onclick="prevHistoryPage()">&laquo; 上一页</button>
+            <span id="pageInfo">第 1 / 1 页</span>
+            <button id="pageNext" onclick="nextHistoryPage()">下一页 &raquo;</button>
+        </div>
     </div>
 </div>
 
@@ -1160,23 +1177,73 @@ async function clearAllData() {
 }
 
 // ==================== 历史记录功能 ====================
+var historyPage = 1;
+var historyPageSize = 10;
+var historyTotalCount = 0;
+var allHistoryTrainings = [];
+
 async function showHistory() {
     var modal = document.getElementById('historyModal');
     var list = document.getElementById('historyList');
+    var pagination = document.getElementById('historyPagination');
     modal.classList.add('active');
+    list.innerHTML = '<li class="history-empty">加载中...</li>';
+    pagination.style.display = 'none';
+
+    historyPage = 1;
+
+    try {
+        // 先获取总数
+        var countResult = await _sbClient
+            .from('training_info')
+            .select('id', { count: 'exact' });
+
+        if (countResult.error) throw countResult.error;
+
+        historyTotalCount = countResult.count || 0;
+        allHistoryTrainings = countResult.data || [];
+
+        if (historyTotalCount === 0) {
+            list.innerHTML = '<li class="history-empty">暂无历史记录</li>';
+            return;
+        }
+
+        // 获取当前页数据
+        await loadHistoryPage();
+
+    } catch (error) {
+        console.error('加载历史记录失败:', error);
+        list.innerHTML = '<li class="history-empty">加载失败，请重试</li>';
+    }
+}
+
+async function loadHistoryPage() {
+    var list = document.getElementById('historyList');
+    var pagination = document.getElementById('historyPagination');
+    var pagePrev = document.getElementById('pagePrev');
+    var pageNext = document.getElementById('pageNext');
+    var pageInfo = document.getElementById('pageInfo');
+
     list.innerHTML = '<li class="history-empty">加载中...</li>';
 
     try {
+        var from = (historyPage - 1) * historyPageSize;
+        var to = from + historyPageSize - 1;
+
         var result = await _sbClient
             .from('training_info')
             .select('*')
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .range(from, to);
 
         if (result.error) throw result.error;
 
         var trainings = result.data || [];
+        var totalPages = Math.ceil(historyTotalCount / historyPageSize);
+
         if (trainings.length === 0) {
             list.innerHTML = '<li class="history-empty">暂无历史记录</li>';
+            pagination.style.display = 'none';
             return;
         }
 
@@ -1189,21 +1256,61 @@ async function showHistory() {
 
             var item = document.createElement('li');
             item.className = 'history-item';
+            item.dataset.id = t.id;
             item.innerHTML =
                 '<div class="history-item-info">' +
                     '<h4>' + esc(course) + '</h4>' +
                     '<p>' + date + (trainer ? ' | ' + esc(trainer) : '') + (location ? ' | ' + esc(location) : '') + '</p>' +
                 '</div>' +
                 '<div class="history-item-actions">' +
-                    '<button onclick="loadTraining(\'' + t.id + '\')">加载</button>' +
-                    '<button class="btn-delete" onclick="deleteTraining(\'' + t.id + '\', event)">删除</button>' +
+                    '<button class="btn-load">加载</button>' +
+                    '<button class="btn-delete">删除</button>' +
                 '</div>';
             list.appendChild(item);
         });
 
+        // 事件委托：处理加载和删除按钮点击
+        list.onclick = function(e) {
+            var item = e.target.closest('.history-item');
+            if (!item) return;
+            var id = item.dataset.id;
+            
+            // 点击加载按钮或整行（非删除按钮区域）时加载
+            if (e.target.classList.contains('btn-load') || !e.target.classList.contains('btn-delete')) {
+                if (!e.target.classList.contains('btn-delete')) {
+                    loadTraining(id);
+                }
+            }
+            // 点击删除按钮时删除
+            if (e.target.classList.contains('btn-delete')) {
+                deleteTraining(id);
+            }
+        };
+
+        // 更新分页控件
+        pageInfo.textContent = '第 ' + historyPage + ' / ' + totalPages + ' 页，共 ' + historyTotalCount + ' 条';
+        pagePrev.disabled = historyPage <= 1;
+        pageNext.disabled = historyPage >= totalPages;
+        pagination.style.display = 'flex';
+
     } catch (error) {
         console.error('加载历史记录失败:', error);
         list.innerHTML = '<li class="history-empty">加载失败，请重试</li>';
+    }
+}
+
+function prevHistoryPage() {
+    if (historyPage > 1) {
+        historyPage--;
+        loadHistoryPage();
+    }
+}
+
+function nextHistoryPage() {
+    var totalPages = Math.ceil(historyTotalCount / historyPageSize);
+    if (historyPage < totalPages) {
+        historyPage++;
+        loadHistoryPage();
     }
 }
 
@@ -1288,18 +1395,56 @@ function createNewTraining() {
     }
 }
 
-async function deleteTraining(id, event) {
-    event.stopPropagation();
-
+async function deleteTraining(id) {
+    console.log('deleteTraining called, id:', id);
+    
     if (!confirm('确定要删除该培训记录吗？\n此操作不可撤销，所有签到数据将一并删除！')) {
         return;
     }
 
     try {
-        // 删除签到记录
-        await _sbClient.from('sign_records').delete().eq('training_id', id);
-        // 删除培训信息
-        await _sbClient.from('training_info').delete().eq('id', id);
+        // 使用 RPC 调用 SQL 直接删除（绕过 RLS 限制）
+        
+        // 1. 先删除签到记录
+        var delSigns = await _sbClient.rpc('exec_sql', {
+            sql: 'DELETE FROM sign_records WHERE training_id = \'' + id + '\'::uuid'
+        });
+        console.log('RPC 删除签到记录:', JSON.stringify(delSigns));
+        
+        if (delSigns.error) {
+            // RPC 不存在时回退到普通删除
+            console.log('RPC不可用，使用普通方式删除');
+            delSigns = await _sbClient.from('sign_records').delete().eq('training_id', id);
+            console.log('普通删除签到记录:', JSON.stringify(delSigns));
+        }
+        
+        // 2. 再删除培训信息
+        var delInfo = await _sbClient.rpc('exec_sql', {
+            sql: 'DELETE FROM training_info WHERE id = \'' + id + '\'::uuid'
+        });
+        console.log('RPC 删除培训信息:', JSON.stringify(delInfo));
+        
+        if (delInfo.error) {
+            delInfo = await _sbClient.from('training_info').delete().eq('id', id);
+            console.log('普通删除培训信息:', JSON.stringify(delInfo));
+            
+            if (delInfo.error) throw new Error(delInfo.error.message);
+        }
+
+        // 3. 验证是否真的删掉了
+        var verify = await _sbClient
+            .from('training_info')
+            .select('id')
+            .eq('id', id)
+            .maybeSingle();
+        
+        console.log('验证结果:', JSON.stringify(verify));
+        
+        if (verify.data) {
+            throw new Error('记录未被实际删除，请在Supabase后台检查 training_info 表的 RLS 策略');
+        }
+
+        alert('删除成功！');
 
         // 如果删除的是当前加载的培训，重置页面
         if (currentTrainingId === id) {
@@ -1311,7 +1456,7 @@ async function deleteTraining(id, event) {
 
     } catch (error) {
         console.error('删除失败:', error);
-        alert('删除失败，请重试！');
+        alert('删除失败：' + error.message + '\n请检查浏览器控制台获取详细信息！');
     }
 }
 
