@@ -770,9 +770,14 @@ function updateStats() {
     document.getElementById('checkoutCount').textContent = checkedOut;
     document.getElementById('recordCount').textContent = signRecords.length;
 
-    if (!document.getElementById('totalCount').value && signed > 0) {
-        document.getElementById('totalCount').value = signed;
+    // 自动统计签到人员最后一个人的序号
+    var lastIndex = 0;
+    for (var i = 0; i < signRecords.length; i++) {
+        if (signRecords[i].department && signRecords[i].emp_id && signRecords[i].name) {
+            lastIndex = Math.max(lastIndex, signRecords[i].row_index + 1);
+        }
     }
+    document.getElementById('totalCount').value = lastIndex > 0 ? lastIndex : '';
 }
 
 // ==================== 二维码生成 ====================
